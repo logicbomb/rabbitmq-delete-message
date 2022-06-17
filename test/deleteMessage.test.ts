@@ -2,7 +2,7 @@
 import amqp from 'amqplib';
 import { expect } from 'chai';
 import * as sinon from 'sinon';
-import { deleteMessage, resetConnection } from '../src/deleteMessage';
+import { deleteMessage, resetConnection, deleteCallback } from '../src/deleteMessage';
 
 describe('Delete message', () => {
   let sandbox: sinon.SinonSandbox;
@@ -114,41 +114,6 @@ describe('Delete message', () => {
     }
   });
 
-  it('Should rejects if message has no messageId', async () => {
-    /** GIVEN */
-    const serverURL = 'amqp://local';
-    const queueName = 'MY_QUEUE';
-    const messageId = '2f5b752e-d6e1-4561-af69-1224a1888de1';
-    const message = {
-      fields: {
-        consumerTag: 'ER'
-      }
-    };
-    const consumeStub = sandbox.stub();
-    consumeStub.callsArgWith(1, message);
-
-    // we should call consume's callback
-    const channel = {
-      consume: consumeStub,
-      ack: sandbox.stub(),
-      nack: sandbox.stub(),
-      cancel: sandbox.stub(),
-      close: sandbox.stub()
-    };
-    const connection = {
-      createConfirmChannel: sandbox.stub().resolves(channel)
-    };
-    sandbox.stub(amqp, 'connect').resolves(connection as any);
-
-    /** when */
-    try {
-      await deleteMessage(serverURL, queueName, messageId);
-    } catch (error) {
-      /** THEN */
-      expect(error.message).to.equal('Message is not valid, it should have a messageId');
-    }
-  });
-
   it('Should rejects if error "acking" the message', async () => {
     /** GIVEN */
     const serverURL = 'amqp://local';
@@ -255,7 +220,8 @@ describe('Delete message', () => {
     sandbox.stub(amqp, 'connect').resolves(connection as any);
 
     /** when */
-    const response = await deleteMessage(serverURL, queueName, messageId);
+    const response = await deleteMessage(serverURL, queueName, message => message.properties.messageId == messageId);
+    
     /** then */
     expect(response.deleted).to.equal(true);
     expect(response.message).to.not.equal(undefined);

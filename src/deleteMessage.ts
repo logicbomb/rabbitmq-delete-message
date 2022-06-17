@@ -42,7 +42,9 @@ async function stopConsumerAndCloseChannel(consumerTag: string, channel: amqp.Ch
   stoped = false;
 }
 
-export async function deleteMessage(serverURL: string, queueName: string, messageId: string): Promise<DeleteResponse> {
+export type DeleteCallback = (message: any) => Boolean;
+
+export async function deleteMessage(serverURL: string, queueName: string, shouldDelete: DeleteCallback): Promise<DeleteResponse> {
   await createChannel(serverURL);
   return new Promise((resolve, reject) => {
     logger.debug(`Delete message ${messageId} from ${queueName} on ${serverURL}`);
@@ -64,7 +66,7 @@ export async function deleteMessage(serverURL: string, queueName: string, messag
             logger.debug(`Stopped already`);
             return;
           }
-          if (message && message.properties && message.properties.messageId) {
+          if (message && message.properties && shouldDelete(message)) {
             if (dones.includes(message.properties.messageId)) {
               logger.debug(`We looped`);
               // We looped, so we need to stop
