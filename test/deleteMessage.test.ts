@@ -2,7 +2,8 @@
 import amqp from 'amqplib';
 import { expect } from 'chai';
 import * as sinon from 'sinon';
-import { deleteMessage, resetConnection, deleteCallback } from '../src/deleteMessage';
+import { loggers } from 'winston';
+import { deleteMessage, resetConnection, DeleteCallback } from '../src/deleteMessage';
 
 describe('Delete message', () => {
   let sandbox: sinon.SinonSandbox;
@@ -27,7 +28,7 @@ describe('Delete message', () => {
 
     /** WHEN */
     try {
-      await deleteMessage(serverURL, queueName, messageId);
+      await deleteMessage(serverURL, queueName, _ => true, _ => "");
     } catch (error) {
       /** THEN */
       expect(error).to.equal(expectedError);
@@ -49,7 +50,7 @@ describe('Delete message', () => {
 
     /** WHEN */
     try {
-      await deleteMessage(serverURL, queueName, messageId);
+      await deleteMessage(serverURL, queueName, _ => true, _ => "");
     } catch (error) {
       /** THEN */
       expect(error).to.equal(expectedError);
@@ -76,7 +77,7 @@ describe('Delete message', () => {
 
     /** WHEN */
     try {
-      await deleteMessage(serverURL, queueName, messageId);
+      await deleteMessage(serverURL, queueName, _ => true, _ => "");
     } catch (error) {
       /** THEN */
       expect(error).to.equal(expectedError);
@@ -107,7 +108,7 @@ describe('Delete message', () => {
 
     /** when */
     try {
-      await deleteMessage(serverURL, queueName, messageId);
+      await deleteMessage(serverURL, queueName, _ => true, _ => "");
     } catch (error) {
       /** THEN */
       expect(error.message).to.equal('Message is not defined');
@@ -125,6 +126,10 @@ describe('Delete message', () => {
       },
       fields: {
         consumerTag: '&é"'
+      },
+      content: {
+        foo: "bar",
+        baz: "quux"
       }
     };
     const consumeStub = sandbox.stub();
@@ -145,7 +150,7 @@ describe('Delete message', () => {
 
     /** when */
     try {
-      await deleteMessage(serverURL, queueName, messageId);
+      await deleteMessage(serverURL, queueName, _ => true, _ => "");
     } catch (error) {
       /** then */
       expect(error.message).to.equal('channel.ack.error');
@@ -156,18 +161,37 @@ describe('Delete message', () => {
     /** GIVEN */
     const serverURL = 'amqp://local';
     const queueName = 'MY_QUEUE';
-    const messageId = '2f5b752e-d6e1-4561-af69-1224a1888de1';
-    const message = {
+    const messageId1 = '2f5b752e-d6e1-4561-af69-1224a1888de1';
+    const messageId2 = '2f5b752e-d6e1-4561-af69-1224a1888de2';
+    const message1 = {
       properties: {
-        messageId
+        messageId: messageId1
       },
       fields: {
         consumerTag: '&é"'
+      },
+      content: {
+        foo: "bar",
+        baz: "quux"
+      }
+    };
+    const message2 = {
+      properties: {
+        messageId: messageId2
+      },
+      fields: {
+        consumerTag: '&é"'
+      },
+      content: {
+        foo: "bar",
+        baz: "quux"
       }
     };
     const consumeStub = sandbox.stub();
-    consumeStub.callsArgWith(1, message);
-
+    consumeStub.callsArgWith(1, message1);
+    consumeStub.callsArgWith(1, message2);
+    consumeStub.callsArgWith(1, message1);
+    
     // we should call consume's callback
     const channel = {
       consume: consumeStub,
@@ -183,7 +207,7 @@ describe('Delete message', () => {
 
     /** when */
     try {
-      await deleteMessage(serverURL, queueName, messageId);
+      await deleteMessage(serverURL, queueName, _ => true, _ => messageId1);
     } catch (error) {
       /** then */
       expect(error.message).to.equal('channel.nack.error');
@@ -201,6 +225,10 @@ describe('Delete message', () => {
       },
       fields: {
         consumerTag: '&é"'
+      },
+      content: {
+        foo: "bar",
+        baz: "quux"
       }
     };
     const consumeStub = sandbox.stub();
@@ -220,10 +248,12 @@ describe('Delete message', () => {
     sandbox.stub(amqp, 'connect').resolves(connection as any);
 
     /** when */
-    const response = await deleteMessage(serverURL, queueName, message => message.properties.messageId == messageId);
-    
+    const response = await deleteMessage(serverURL, queueName, msg => {
+      console.debug(`checking message ${JSON.stringify(msg)}`);
+      return msg.foo == "bar";
+    }, _ => "");
+
     /** then */
-    expect(response.deleted).to.equal(true);
-    expect(response.message).to.not.equal(undefined);
+    expect(response).to.equal(1);
   });
 });

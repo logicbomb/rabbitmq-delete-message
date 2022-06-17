@@ -4,8 +4,8 @@ import { initLoggers } from './logger';
 
 const TIMEOUT = parseInt(`${process.env.RABBITMQ_DELETE_MESSAGE_TIMEOUT}`, 10) || 1000;
 
-const dones: string[] = [];
-let stoped = false;
+// const dones: string[] = [];
+let stopped = false;
 
 const logger = initLoggers();
 
@@ -31,79 +31,74 @@ export function resetConnection(): void {
 }
 
 async function stopConsumerAndCloseChannel(consumerTag: string, channel: amqp.Channel): Promise<void> {
-  stoped = true;
+  stopped = true;
   await channel.cancel(consumerTag);
   await wait(TIMEOUT);
 
-  if (stoped) {
+  if (stopped) {
     channel.close();
   }
-  dones.length = 0;
-  stoped = false;
+  stopped = false;
 }
 
 export type DeleteCallback = (message: any) => Boolean;
+export type LoopValCallback = (message: any) => any;
 
-export async function deleteMessage(serverURL: string, queueName: string, shouldDelete: DeleteCallback): Promise<DeleteResponse> {
+export async function deleteMessage(serverURL: string, queueName: string, shouldDelete: DeleteCallback, getLoopVal: LoopValCallback): Promise<number> {
+  let loopVal: any = null;
+  let deleteCount: number = 0;
   await createChannel(serverURL);
   return new Promise((resolve, reject) => {
-    logger.debug(`Delete message ${messageId} from ${queueName} on ${serverURL}`);
-    const callback = (value: DeleteResponse): void => {
-      if (value.deleted) {
-        logger.info(`Message ${messageId} was deleted`);
-      } else {
-        logger.info(`Message ${messageId} was not found`);
-      }
-      resolve(value);
-    };
     try {
       if (channel === null) {
-        return;
+        throw "Could not create RMQ channel";
       }
+
       channel
         .consume(queueName, async (message) => {
-          if (stoped) {
+          if (stopped) {
             logger.debug(`Stopped already`);
             return;
           }
-          if (message && message.properties && shouldDelete(message)) {
-            if (dones.includes(message.properties.messageId)) {
-              logger.debug(`We looped`);
-              // We looped, so we need to stop
+
+          if (message) {
+            const loopValT = getLoopVal(message);
+            if (loopVal === null) {
+              console.debug(`setting loopVal ${loopVal} === ${loopValT}`);
+              loopVal = loopValT
+            } else if (loopVal === loopValT) {
+              console.debug(`We looped`);
               // eslint-disable-next-line @typescript-eslint/ban-ts-ignore
               // @ts-ignore
               await stopConsumerAndCloseChannel(message.fields.consumerTag, channel);
-              callback({ deleted: false });
-            } else {
-              dones.push(message.properties.messageId);
-              try {
-                if (channel === null) {
-                  return;
-                }
-                if (message.properties.messageId === messageId) {
-                  logger.debug(`message found`);
-                  channel.ack(message);
-                  // We found so no need to continue
-                  callback({ deleted: true, message });
-                  // eslint-disable-next-line @typescript-eslint/ban-ts-ignore
-                  // @ts-ignore
-                  await stopConsumerAndCloseChannel(message.fields.consumerTag, channel);
-                } else {
-                  channel.nack(message, false, true);
-                }
-              } catch (e) {
-                // eslint-disable-next-line @typescript-eslint/ban-ts-ignore
-                // @ts-ignore
-                await stopConsumerAndCloseChannel(message.fields.consumerTag, channel);
-                return reject(e);
+              resolve(deleteCount);
+            }
+
+            // checking to see if there is a message to delete
+            try {
+              if (channel === null) {
+                return;
               }
+
+              if (shouldDelete(message.content)) {
+                console.debug(`acking message`);
+                channel.ack(message); // dequeue message and continue
+              } else {
+                console.debug(`nacking message`);
+                channel.nack(message, false, true); // requeue the message and continue
+              }
+            } catch (e) {
+              // eslint-disable-next-line @typescript-eslint/ban-ts-ignore
+              // @ts-ignore
+              await stopConsumerAndCloseChannel(message.fields.consumerTag, channel);
+              return reject(e);
             }
           } else {
             /**
              * As we can not identify a message, we should stop, because
              * we will not be able to know when we looped
              */
-            logger.warn(`Message is not defined or not valid, it should have a messageId`);
+            console.warn(`Message is not defined or not valid, it should have a messageId`);
             if (message) {
               // eslint-disable-next-line @typescript-eslint/ban-ts-ignore
               // @ts-ignore
@@ -121,7 +116,7 @@ export async function deleteMessage(serverURL: string, queueName: string, should
           reject(er);
         });
     } catch (error) {
-      logger.error(error);
+      logger.error(`${error}`);
       reject(error);
     }
   });
