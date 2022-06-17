@@ -2,19 +2,16 @@
 import amqp from 'amqplib';
 import { expect } from 'chai';
 import * as sinon from 'sinon';
-import { loggers } from 'winston';
-import { deleteMessage, resetConnection, DeleteCallback } from '../src/deleteMessage';
+import { deleteMessage, ProcessingInstruction } from '../src/deleteMessage';
 
+const defaultProcessingInstruction: ProcessingInstruction = { delete: true, continue: false };
 describe('Delete message', () => {
   let sandbox: sinon.SinonSandbox;
   beforeEach(() => {
     sandbox = sinon.createSandbox();
   });
 
-  afterEach(() => {
-    sandbox.restore();
-    resetConnection();
-  });
+  afterEach(() => sandbox.restore());
 
   it('should rejects if unable to connect to the server', async () => {
     /** GIVEN */
@@ -28,7 +25,7 @@ describe('Delete message', () => {
 
     /** WHEN */
     try {
-      await deleteMessage(serverURL, queueName, _ => true, _ => "");
+      await deleteMessage(serverURL, queueName, _ => defaultProcessingInstruction);
     } catch (error) {
       /** THEN */
       expect(error).to.equal(expectedError);
@@ -50,7 +47,7 @@ describe('Delete message', () => {
 
     /** WHEN */
     try {
-      await deleteMessage(serverURL, queueName, _ => true, _ => "");
+      await deleteMessage(serverURL, queueName, _ => defaultProcessingInstruction);
     } catch (error) {
       /** THEN */
       expect(error).to.equal(expectedError);
@@ -77,7 +74,7 @@ describe('Delete message', () => {
 
     /** WHEN */
     try {
-      await deleteMessage(serverURL, queueName, _ => true, _ => "");
+      await deleteMessage(serverURL, queueName, _ => defaultProcessingInstruction);
     } catch (error) {
       /** THEN */
       expect(error).to.equal(expectedError);
@@ -102,16 +99,17 @@ describe('Delete message', () => {
       close: sandbox.stub()
     };
     const connection = {
-      createConfirmChannel: sandbox.stub().resolves(channel)
+      createConfirmChannel: sandbox.stub().resolves(channel),
+      close: sandbox.stub()
     };
     sandbox.stub(amqp, 'connect').resolves(connection as any);
 
     /** when */
     try {
-      await deleteMessage(serverURL, queueName, _ => true, _ => "");
+      await deleteMessage(serverURL, queueName, _ => defaultProcessingInstruction);
     } catch (error) {
       /** THEN */
-      expect(error.message).to.equal('Message is not defined');
+      expect(error).to.equal('Message is not defined');
     }
   });
 
@@ -144,13 +142,14 @@ describe('Delete message', () => {
       close: sandbox.stub()
     };
     const connection = {
-      createConfirmChannel: sandbox.stub().resolves(channel)
+      createConfirmChannel: sandbox.stub().resolves(channel),
+      close: sandbox.stub()
     };
     sandbox.stub(amqp, 'connect').resolves(connection as any);
 
     /** when */
     try {
-      await deleteMessage(serverURL, queueName, _ => true, _ => "");
+      await deleteMessage(serverURL, queueName, _ => defaultProcessingInstruction);
     } catch (error) {
       /** then */
       expect(error.message).to.equal('channel.ack.error');
@@ -161,23 +160,10 @@ describe('Delete message', () => {
     /** GIVEN */
     const serverURL = 'amqp://local';
     const queueName = 'MY_QUEUE';
-    const messageId1 = '2f5b752e-d6e1-4561-af69-1224a1888de1';
-    const messageId2 = '2f5b752e-d6e1-4561-af69-1224a1888de2';
-    const message1 = {
+    const messageId = '2f5b752e-d6e1-4561-af69-1224a1888de2';
+    const message = {
       properties: {
-        messageId: messageId1
-      },
-      fields: {
-        consumerTag: '&é"'
-      },
-      content: {
-        foo: "bar",
-        baz: "quux"
-      }
-    };
-    const message2 = {
-      properties: {
-        messageId: messageId2
+        messageId
       },
       fields: {
         consumerTag: '&é"'
@@ -188,10 +174,8 @@ describe('Delete message', () => {
       }
     };
     const consumeStub = sandbox.stub();
-    consumeStub.callsArgWith(1, message1);
-    consumeStub.callsArgWith(1, message2);
-    consumeStub.callsArgWith(1, message1);
-    
+    consumeStub.callsArgWith(1, message);
+
     // we should call consume's callback
     const channel = {
       consume: consumeStub,
@@ -201,13 +185,15 @@ describe('Delete message', () => {
       close: sandbox.stub()
     };
     const connection = {
-      createConfirmChannel: sandbox.stub().resolves(channel)
+      createConfirmChannel: sandbox.stub().resolves(channel),
+      close: sandbox.stub()
     };
     sandbox.stub(amqp, 'connect').resolves(connection as any);
 
     /** when */
     try {
-      await deleteMessage(serverURL, queueName, _ => true, _ => messageId1);
+      const pi = { delete: false, continue: true };
+      await deleteMessage(serverURL, queueName, _ => pi);
     } catch (error) {
       /** then */
       expect(error.message).to.equal('channel.nack.error');
@@ -243,17 +229,70 @@ describe('Delete message', () => {
       close: sandbox.stub()
     };
     const connection = {
-      createConfirmChannel: sandbox.stub().resolves(channel)
+      createConfirmChannel: sandbox.stub().resolves(channel),
+      close: sandbox.stub()
     };
     sandbox.stub(amqp, 'connect').resolves(connection as any);
 
     /** when */
     const response = await deleteMessage(serverURL, queueName, msg => {
-      console.debug(`checking message ${JSON.stringify(msg)}`);
-      return msg.foo == "bar";
-    }, _ => "");
+      return {
+        delete: msg.foo == "bar",
+        continue: false
+      }
+    });
 
     /** then */
     expect(response).to.equal(1);
+  });
+
+  it ('Should timeout if no message are received', async() => {
+    const serverURL = 'amqp://local';
+    const queueName = 'MY_QUEUE';
+    const messageId = '2f5b752e-d6e1-4561-af69-1224a1888de1';
+    const message = {
+      properties: {
+        messageId
+      },
+      fields: {
+        consumerTag: '&é"'
+      },
+      content: {
+        foo: "bar",
+        baz: "quux"
+      }
+    };
+   
+    const consumeStub = sandbox.stub();
+    consumeStub.callsArgWith(1, message);
+
+    // we should call consume's callback
+    const channel = {
+      consume: consumeStub,
+      ack: sandbox.stub(),
+      nack: sandbox.stub(),
+      cancel: sandbox.stub(),
+      close: sandbox.stub()
+    };
+    const connection = {
+      createConfirmChannel: sandbox.stub().resolves(channel),
+      close: sandbox.stub()
+    };
+    sandbox.stub(amqp, 'connect').resolves(connection as any);
+
+    /** when */
+    try {
+      const response = await deleteMessage(serverURL, queueName, msg => {
+        return {
+          delete: msg.foo == "bar",
+          continue: true
+        }
+      });
+    } catch (err) {
+      /** then */
+      expect(err).to.equal("no message received in 1.5s");
+      
+    }
+
   });
 });
